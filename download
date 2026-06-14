@@ -1,0 +1,105 @@
+import { FLICK_MIN_DIST, FLICK_MAX_TIME } from './constants.js'
+
+// ─── Input Manager ────────────────────────────────────────────────────────────
+// Handles both touch and mouse, emits 'tap' and 'flick' events.
+
+export class InputManager {
+  constructor(canvas) {
+    this.canvas   = canvas
+    this._touches = new Map()   // id → {x0,y0,t0,x,y}
+    this._cbs     = { tap: [], flick: [] }
+
+    // Mouse state
+    this._mouse = null
+
+    canvas.addEventListener('touchstart',  e => this._onTouchStart(e),  { passive: false })
+    canvas.addEventListener('touchmove',   e => this._onTouchMove(e),   { passive: false })
+    canvas.addEventListener('touchend',    e => this._onTouchEnd(e),    { passive: false })
+    canvas.addEventListener('touchcancel', e => this._onTouchEnd(e),    { passive: false })
+    canvas.addEventListener('mousedown',   e => this._onMouseDown(e))
+    canvas.addEventListener('mouseup',     e => this._onMouseUp(e))
+    canvas.addEventListener('mousemove',   e => this._onMouseMove(e))
+  }
+
+  on(event, cb) {
+    this._cbs[event]?.push(cb)
+    return this
+  }
+
+  _emit(event, data) {
+    for (const cb of this._cbs[event] ?? []) cb(data)
+  }
+
+  _canvasPos(clientX, clientY) {
+    const rect  = this.canvas.getBoundingClientRect()
+    const scaleX = this.canvas.width  / rect.width
+    const scaleY = this.canvas.height / rect.height
+    return {
+      x: (clientX - rect.left) * scaleX,
+      y: (clientY - rect.top)  * scaleY,
+    }
+  }
+
+  _onTouchStart(e) {
+    e.preventDefault()
+    for (const t of e.changedTouches) {
+      const pos = this._canvasPos(t.clientX, t.clientY)
+      this._touches.set(t.identifier, { x0: pos.x, y0: pos.y, t0: Date.now(), x: pos.x, y: pos.y })
+    }
+  }
+
+  _onTouchMove(e) {
+    e.preventDefault()
+    for (const t of e.changedTouches) {
+      const s = this._touches.get(t.identifier)
+      if (!s) continue
+      const pos = this._canvasPos(t.clientX, t.clientY)
+      s.x = pos.x; s.y = pos.y
+    }
+  }
+
+  _onTouchEnd(e) {
+    e.preventDefault()
+    for (const t of e.changedTouches) {
+      const s = this._touches.get(t.identifier)
+      if (!s) { this._touches.delete(t.identifier); continue }
+      const pos = this._canvasPos(t.clientX, t.clientY)
+      this._resolve(s.x0, s.y0, pos.x, pos.y, Date.now() - s.t0)
+      this._touches.delete(t.identifier)
+    }
+  }
+
+  _onMouseDown(e) {
+    const pos = this._canvasPos(e.clientX, e.clientY)
+    this._mouse = { x0: pos.x, y0: pos.y, t0: Date.now(), x: pos.x, y: pos.y }
+  }
+
+  _onMouseMove(e) {
+    if (!this._mouse) return
+    const pos = this._canvasPos(e.clientX, e.clientY)
+    this._mouse.x = pos.x; this._mouse.y = pos.y
+  }
+
+  _onMouseUp(e) {
+    if (!this._mouse) return
+    const pos = this._canvasPos(e.clientX, e.clientY)
+    this._resolve(this._mouse.x0, this._mouse.y0, pos.x, pos.y, Date.now() - this._mouse.t0)
+    this._mouse = null
+  }
+
+  _resolve(x0, y0, x1, y1, dt) {
+    const dx   = x1 - x0, dy = y1 - y0
+    const dist = Math.hypot(dx, dy)
+
+    if (dist < FLICK_MIN_DIST) {
+      // Tap
+      this._emit('tap', { x: x1, y: y1 })
+    } else {
+      // Flick – direction by dominant axis
+      let dir
+      if (Math.abs(dx) >= Math.abs(dy)) dir = dx > 0 ? 'right' : 'left'
+      else                               dir = dy > 0 ? 'down'  : 'up'
+      this._emit('flick', { x: x0, y: y0, dx, dy, dir, dist, dt })
+    }
+  }
+}
